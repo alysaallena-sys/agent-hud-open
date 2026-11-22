@@ -69,9 +69,14 @@ file "$work/SimpleHud" | grep -q 'arm64'
 file "$work/SandboxProbe" | grep -q 'arm64'
 
 profile=$root/src/apps/local-hud/seatbelt.sb
-inside_real=$(realpath "$inside")
-outside_real=$(realpath "$outside")
-probe=$(realpath "$work/SandboxProbe")
+inside_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$inside")
+outside_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$outside")
+probe=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$work/SandboxProbe")
+echo "inside_real=$inside_real"
+echo "outside_real=$outside_real"
+echo "probe=$probe"
+echo "starting sandbox-exec"
+set +e
 sandbox-exec \
   -D "BIN=$probe" \
   -D "ROOT0=$inside_real" \
@@ -79,7 +84,14 @@ sandbox-exec \
   -D "ROOT2=$inside_real" \
   -D "ROOT3=$inside_real" \
   -f "$profile" \
-  "$probe" "$inside_real" "$outside_real" | tee "$work/probe.txt"
+  "$probe" "$inside_real" "$outside_real" > "$work/probe.txt" 2> "$work/probe.err"
+probe_status=$?
+set -e
+echo "sandbox-exec status=$probe_status"
+echo "probe stdout:"
+cat "$work/probe.txt"
+echo "probe stderr:"
+cat "$work/probe.err"
 grep -q 'outside_read=denied' "$work/probe.txt"
 grep -q 'inside_read=ok' "$work/probe.txt"
 grep -q 'write=denied' "$work/probe.txt"

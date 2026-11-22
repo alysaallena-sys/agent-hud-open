@@ -30,6 +30,7 @@ int main(int argc, char **argv) {
     int inside_ok;
     int wrote;
     int connected = 0;
+    int connect_errno = 0;
     int fd;
     struct timeval timeout;
     struct sockaddr_in address;
@@ -54,7 +55,9 @@ int main(int argc, char **argv) {
     }
 
     fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd >= 0) {
+    if (fd < 0) {
+        connect_errno = errno;
+    } else {
         timeout.tv_sec = 2;
         timeout.tv_usec = 0;
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
@@ -64,6 +67,8 @@ int main(int argc, char **argv) {
         address.sin_addr.s_addr = inet_addr("203.0.113.1");
         if (connect(fd, (struct sockaddr *)&address, sizeof address) == 0) {
             connected = 1;
+        } else {
+            connect_errno = errno;
         }
         close(fd);
     }
@@ -72,6 +77,7 @@ int main(int argc, char **argv) {
     printf("inside_read=%s\n", inside_ok ? "ok" : "denied");
     printf("write=%s\n", wrote ? "allowed" : "denied");
     printf("connect=%s\n", connected ? "allowed" : "denied");
+    printf("connect_errno=%d\n", connect_errno);
     if (!outside_ok && inside_ok && !wrote && !connected) {
         return 0;
     }
