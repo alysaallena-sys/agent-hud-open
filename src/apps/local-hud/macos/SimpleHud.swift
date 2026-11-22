@@ -29,28 +29,47 @@ func refuse(_ message: String) -> Never {
     exit(2)
 }
 
-let hudURL = URL(fileURLWithPath: hudPath).resolvingSymlinksInPath()
-let directory = hudURL.deletingLastPathComponent().path
 let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "/._-+ "))
-if directory.unicodeScalars.contains(where: { !allowed.contains($0) }) {
-    refuse("refusing a path the sandbox profile cannot quote")
+func quoteable(_ path: String) -> Bool {
+    path.unicodeScalars.allSatisfy { allowed.contains($0) }
 }
-let profile = """
-(version 1)
-(deny default)
-(deny network*)
-(deny network-inbound)
-(deny network-outbound)
-(deny network-bind)
-(deny file-write*)
-(allow file-read* (subpath "/usr/lib") (subpath "/System") (subpath "/usr/share") (subpath "/Library"))
-(allow file-read* (subpath "\(directory)"))
-(allow signal (target self))
-(allow sysctl-read)
-(allow mach-lookup
-    (global-name "com.apple.system.logger")
-    (global-name "com.apple.CoreServices.coreservicesd"))
-"""
+func allowTree(_ path: String, into lines: inout [String]) {
+    if !quoteable(path) {
+        refuse("refusing a path the sandbox profile cannot quote")
+    }
+    var ancestor = ""
+    let parts = path.split(separator: "/", omittingEmptySubsequences: true)
+    for (index, part) in parts.enumerated() {
+        ancestor += "/" + part
+        if index + 1 == parts.count {
+            lines.append("(allow file-read* (subpath \"\(ancestor)\"))")
+        } else {
+            lines.append("(allow file-read-metadata (literal \"\(ancestor)\"))")
+        }
+    }
+}
+
+let originalURL = URL(fileURLWithPath: hudPath)
+let hudURL = originalURL.resolvingSymlinksInPath()
+var rules = [
+    "(version 1)",
+    "(deny default)",
+    "(deny network*)",
+    "(deny network-inbound)",
+    "(deny network-outbound)",
+    "(deny network-bind)",
+    "(deny file-write*)",
+    "(allow file-read* (subpath \"/usr/lib\") (subpath \"/System\") (subpath \"/usr/share\") (subpath \"/Library\"))",
+    "(allow file-read-metadata (literal \"/\"))",
+    "(allow signal (target self))",
+    "(allow sysctl-read)",
+    "(allow mach-lookup",
+    "    (global-name \"com.apple.system.logger\")",
+    "    (global-name \"com.apple.CoreServices.coreservicesd\"))",
+]
+allowTree(originalURL.deletingLastPathComponent().path, into: &rules)
+allowTree(hudURL.deletingLastPathComponent().path, into: &rules)
+let profile = rules.joined(separator: "\n")
 let sandboxCode = profile.withCString { pointer in
     sandboxInit(pointer, 0, nil)
 }
@@ -62,7 +81,7 @@ let text: String
 do {
     text = try String(contentsOf: hudURL, encoding: .utf8)
 } catch {
-    refuse("could not read the HUD text file")
+    refuse("could not read the HUD text file at \(hudURL.path)")
 }
 
 final class Delegate: NSObject, NSApplicationDelegate {
