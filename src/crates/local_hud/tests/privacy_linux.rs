@@ -42,12 +42,29 @@ fn the_binary_has_no_socket_inside_a_network_namespace() {
         .spawn()
         .expect("unshare --net is required for this regression");
     let stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
     let reader = std::thread::spawn(move || {
         let mut line = String::new();
         std::io::BufRead::read_line(&mut std::io::BufReader::new(stdout), &mut line).unwrap();
         line
     });
+    let errors = std::thread::spawn(move || {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut stderr, &mut text).unwrap();
+        text
+    });
     let line = reader.join().unwrap();
+    if line.is_empty() {
+        let status = child.wait().unwrap();
+        let err = errors.join().unwrap();
+        if namespace_unavailable(&err) {
+            // GitHub-hosted Ubuntu often refuses unprivileged user namespaces.
+            // This proof then does not run. It is not a socket found in the reader.
+            eprintln!("network-namespace proof skipped: {err}");
+            return;
+        }
+        panic!("reader produced no snapshot (status {status}): {err}");
+    }
     assert!(line.contains("\"input_tokens\":2"), "{line}");
     assert_no_sockets(child.id());
     let status = child.wait().unwrap();
@@ -56,6 +73,13 @@ fn the_binary_has_no_socket_inside_a_network_namespace() {
     // macOS sandbox run, and it does not prove a code path that was not
     // executed cannot open a socket.
     let _ = Duration::from_millis(1);
+}
+
+fn namespace_unavailable(err: &str) -> bool {
+    let text = err.to_ascii_lowercase();
+    text.contains("operation not permitted")
+        || text.contains("permission denied")
+        || text.contains("user namespace")
 }
 
 fn assert_no_sockets(pid: u32) {
