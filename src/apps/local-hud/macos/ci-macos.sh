@@ -55,8 +55,16 @@ if grep -q 'secret-sentinel' "$work/hud.txt" || grep -q 'prompt-sentinel' "$work
   exit 1
 fi
 
-swiftc -O -o "$work/SimpleHud" "$root/src/apps/local-hud/macos/SimpleHud.swift" -framework AppKit
-swiftc -O -o "$work/SandboxProbe" "$root/src/apps/local-hud/macos/SandboxProbe.swift"
+echo "swift: $(xcrun swiftc --version | head -1)"
+target=arm64-apple-macos14.0
+echo "compiling SimpleHud for $target"
+xcrun swiftc -O -target "$target" -o "$work/SimpleHud" "$root/src/apps/local-hud/macos/SimpleHud.swift" -framework AppKit
+echo "compiling SandboxProbe for $target"
+xcrun swiftc -O -target "$target" -o "$work/SandboxProbe" "$root/src/apps/local-hud/macos/SandboxProbe.swift"
+echo "SimpleHud file type:"
+file "$work/SimpleHud"
+echo "SandboxProbe file type:"
+file "$work/SandboxProbe"
 file "$work/SimpleHud" | grep -q 'arm64'
 file "$work/SandboxProbe" | grep -q 'arm64'
 
