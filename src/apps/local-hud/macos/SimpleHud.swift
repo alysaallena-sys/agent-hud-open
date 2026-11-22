@@ -49,8 +49,16 @@ func allowTree(_ path: String, into lines: inout [String]) {
     }
 }
 
+func realPath(_ path: String) -> String {
+    guard let pointer = realpath(path, nil) else {
+        return path
+    }
+    defer { free(pointer) }
+    return String(cString: pointer)
+}
+
 let originalURL = URL(fileURLWithPath: hudPath)
-let hudURL = originalURL.resolvingSymlinksInPath()
+let hudURL = URL(fileURLWithPath: realPath(hudPath))
 var rules = [
     "(version 1)",
     "(deny default)",
