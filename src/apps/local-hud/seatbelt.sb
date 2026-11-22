@@ -1,0 +1,29 @@
+;; Seatbelt profile for the agent-hud-local binary.
+;; The wrapper passes BIN and ROOT0..ROOT3. This file was not executed here.
+;; Do not delete the network deny to make a launch succeed.
+(version 1)
+(deny default)
+(deny network*)
+(deny network-inbound)
+(deny network-outbound)
+(deny network-bind)
+(deny file-write*)
+(deny system-socket)
+(allow file-read*
+    (subpath "/usr/lib")
+    (subpath "/System")
+    (subpath "/usr/share"))
+(allow file-read* (literal (param "BIN")))
+(allow file-read* (subpath (param "ROOT0")))
+(allow file-read* (subpath (param "ROOT1")))
+(allow file-read* (subpath (param "ROOT2")))
+(allow file-read* (subpath (param "ROOT3")))
+(allow process-exec (literal (param "BIN")))
+(allow signal (target self))
+(allow sysctl-read)
+(allow mach-lookup
+    (global-name "com.apple.system.logger")
+    (global-name "com.apple.system.notification_center")
+    (global-name "com.apple.CoreServices.coreservicesd")
+    (global-name "com.apple.coreservices.launchservicesd")
+    (global-name "com.apple.distributed_notifications@Uv3"))

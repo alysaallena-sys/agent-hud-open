@@ -1,0 +1,15 @@
+Agent HUD Local
+Copyright 2026 the authors of this modified build
+
+This program is a modified, local-only, read-only subset of Agent HUD 0.6.11.
+Upstream project: https://github.com/jazzenchen/agent-hud-open
+License: Apache License 2.0. The license text is the LICENSE file at the
+repository root. This NOTICE is the attribution required for the modification.
+
+The modification is the `agent-hud-local` package and the files under
+`src/apps/local-hud/`. It does not link the upstream host, platform, agent,
+messaging, LAN, or share crates. The rest of this repository is still the
+upstream Agent HUD source and is not the local-only build.
+
+See docs/local-only.md for the capability inventory, threat model, residual
+risk, and the arm64 macOS build steps.

@@ -13,6 +13,8 @@
     "build:macos": "node src/tooling/build.mjs --platform macos",
     "build:windows": "node src/tooling/build.mjs --platform windows",
     "build:linux": "node src/tooling/build.mjs --platform linux",
+    "local:build": "cargo build -p agent-hud-local --release",
+    "local:test": "cargo test -p agent-hud-local",
     "mcp:build": "pnpm --filter @agent-hud/mcp run build",
     "check": "pnpm run format:check && pnpm run typecheck && pnpm run build && pnpm run check:platform && pnpm run check:packages && pnpm run check:clients && pnpm run check:test-paths && pnpm run check:file-size && node src/tooling/parity-ledger.mjs --check && cargo check --workspace",
     "check:platform": "node src/tooling/check-platform-boundary.mjs",

@@ -1,5 +1,7 @@
 <h1 align="center">Agent HUD</h1>
 
+> **Modified fork.** The local-only read-only build is `agent-hud-local` 0.6.11-local.1, documented in [docs/local-only.md](docs/local-only.md). It is not the upstream release. The rest of this tree is still Agent HUD 0.6.11 from [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) (Apache-2.0) and is not the privacy build. Do not treat `pnpm build` or the desktop app as local-only.
+
 <p align="center">
   <strong>HUD for your agents.</strong><br>
   On your screen. On your phone. On your wrist.
