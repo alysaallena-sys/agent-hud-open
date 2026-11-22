@@ -1,0 +1,12 @@
+Host: Linux x86_64, rustc 1.90.0 (1159e78c4 2025-09-14)
+Date of this run: 2026-11-22
+Command: cargo +1.90.0 test -p agent-hud-local --offline
+Result: 11 tests passed (9 shared, 1 Linux network namespace, 1 Unix symlink). Clippy -D warnings passed for this package.
+
+The Linux test `the_binary_has_no_socket_inside_a_network_namespace` ran the binary under `unshare --net --map-root-user`, read one JSON line that contained the fixture counter, and observed only the header row in that process's tcp, tcp6, udp, and udp6 tables and no socket file descriptors. That is evidence for that invocation on Linux. It is not a macOS sandbox run and it does not cover code that did not execute.
+
+No arm64 macOS binary was produced. SimpleHud.swift was not compiled. sandbox-exec was not run. entitlements.plist was not applied to a bundle.
+
+`cargo tree -p agent-hud-local --edges normal,dev` resolved to serde, serde_json, tempfile, and their parse/proc-macro crates. tempfile is a dev-dependency used by the tests.
+
+A debug binary on this host printed a Simple HUD for one fixture Codex CLI rollout (42.5% client-recorded), a Claude Desktop index id, and a Cursor transcript id. Prompt text placed in those files was not printed. ChatGPT desktop and both plan quotas that need a sign-in were unavailable. `sandbox_applied` stays false because this process does not install an OS sandbox.

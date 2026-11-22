@@ -1,5 +1,7 @@
 <h1 align="center">Agent HUD</h1>
 
+> **修改版。** 仅本地、只读的构建是 `agent-hud-local` 0.6.11-local.1，说明见 [docs/local-only.md](docs/local-only.md)。它不是上游发行版。本仓库其余部分仍是 Agent HUD 0.6.11，`pnpm build` 和桌面应用不是这个本地构建。
+
 <p align="center">
   <strong>为你的 agents 打造的 HUD。</strong><br>
   在屏幕上，在手机上，在手腕上。
