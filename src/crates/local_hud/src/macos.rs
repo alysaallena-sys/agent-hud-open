@@ -8,6 +8,11 @@ use std::path::{Path, PathBuf};
 extern "C" {
     fn sandbox_init(profile: *const c_char, flags: u64, errorbuf: *mut *mut c_char) -> i32;
     fn sandbox_free_error(errorbuf: *mut c_char);
+    fn __error() -> *mut i32;
+    fn socket(domain: i32, ty: i32, protocol: i32) -> i32;
+    fn connect(fd: i32, addr: *const u8, len: u32) -> i32;
+    fn close(fd: i32) -> i32;
+    fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32;
 }
 
 pub fn confine(roots: &[PathBuf]) -> Result<bool, String> {
@@ -75,11 +80,43 @@ pub fn self_test(inside: &Path, outside: &Path) -> Result<(), String> {
     );
     println!("write={}", if write_denied { "denied" } else { "allowed" });
     println!("inside_read={}", if inside_ok { "ok" } else { "denied" });
-    if outside_denied && write_denied && inside_ok {
+    let connect_errno = connect_errno();
+    println!("connect_errno={connect_errno}");
+    // 1 and 13 are the permission denials from the seatbelt. A timeout or
+    // "in progress" would mean the network deny did not fire.
+    let connect_denied = matches!(connect_errno, 1 | 13);
+    if outside_denied && write_denied && inside_ok && connect_denied {
         Ok(())
     } else {
         Err("sandbox self-test failed".to_owned())
     }
+}
+
+fn connect_errno() -> i32 {
+    let fd = unsafe { socket(2, 1, 0) };
+    if fd < 0 {
+        return unsafe { *__error() };
+    }
+    unsafe { fcntl(fd, 4, 4) };
+    #[repr(C)]
+    struct Addr {
+        len: u8,
+        family: u8,
+        port: u16,
+        addr: u32,
+        zero: [u8; 8],
+    }
+    let addr = Addr {
+        len: 16,
+        family: 2,
+        port: u16::from_be(9),
+        addr: u32::from_be_bytes([203, 0, 113, 1]),
+        zero: [0; 8],
+    };
+    let failed = unsafe { connect(fd, std::ptr::from_ref(&addr).cast(), 16) } != 0;
+    let err = if failed { unsafe { *__error() } } else { 0 };
+    unsafe { close(fd) };
+    err
 }
 
 fn allow_literal(profile: &mut String, path: &Path) -> Result<(), String> {

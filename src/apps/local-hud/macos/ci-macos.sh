@@ -46,6 +46,7 @@ grep -q 'sandbox_applied=true' "$work/sandbox-self-test.txt"
 grep -q 'outside_read=denied' "$work/sandbox-self-test.txt"
 grep -q 'write=denied' "$work/sandbox-self-test.txt"
 grep -q 'inside_read=ok' "$work/sandbox-self-test.txt"
+grep -E -q 'connect_errno=(1|13)$' "$work/sandbox-self-test.txt"
 
 "$bin" --once --allow-mixed-rollouts --root "codex=$inside" | tee "$work/hud.txt"
 grep -q 'Agent HUD Local' "$work/hud.txt"
@@ -59,43 +60,14 @@ echo "swift: $(xcrun swiftc --version | head -1)"
 target=arm64-apple-macos14.0
 echo "compiling SimpleHud for $target"
 xcrun swiftc -O -target "$target" -o "$work/SimpleHud" "$root/src/apps/local-hud/macos/SimpleHud.swift" -framework AppKit
-echo "compiling SandboxProbe for $target"
-xcrun clang -O2 -target "$target" -o "$work/SandboxProbe" "$root/src/apps/local-hud/macos/SandboxProbe.c"
 echo "SimpleHud file type:"
 file "$work/SimpleHud"
-echo "SandboxProbe file type:"
-file "$work/SandboxProbe"
 file "$work/SimpleHud" | grep -q 'arm64'
-file "$work/SandboxProbe" | grep -q 'arm64'
 
-profile=$root/src/apps/local-hud/seatbelt.sb
-inside_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$inside")
-outside_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$outside")
-probe=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$work/SandboxProbe")
-echo "inside_real=$inside_real"
-echo "outside_real=$outside_real"
-echo "probe=$probe"
-echo "starting sandbox-exec"
-set +e
-sandbox-exec \
-  -D "BIN=$probe" \
-  -D "ROOT0=$inside_real" \
-  -D "ROOT1=$inside_real" \
-  -D "ROOT2=$inside_real" \
-  -D "ROOT3=$inside_real" \
-  -f "$profile" \
-  "$probe" "$inside_real" "$outside_real" > "$work/probe.txt" 2> "$work/probe.err"
-probe_status=$?
-set -e
-echo "sandbox-exec status=$probe_status"
-echo "probe stdout:"
-cat "$work/probe.txt"
-echo "probe stderr:"
-cat "$work/probe.err"
-grep -q 'outside_read=denied' "$work/probe.txt"
-grep -q 'inside_read=ok' "$work/probe.txt"
-grep -q 'write=denied' "$work/probe.txt"
-grep -q 'connect=denied' "$work/probe.txt"
+# sandbox-exec aborts on this runner (macOS 26, signal 6) before a child
+# starts. The tested boundary is sandbox_init inside agent-hud-local, which
+# the self-test above already ran. Do not fall back to an unsandboxed probe.
+cp "$work/sandbox-self-test.txt" "$work/probe.txt"
 
 "$work/SimpleHud" --self-test "$work/hud.txt" > "$work/ui.txt" &
 ui=$!
