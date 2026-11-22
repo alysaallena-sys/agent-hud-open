@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use agent_hud_local::{collect, OptIn, RootKind};
+use agent_hud_local::{collect, OptIn, ReadOptions, RootKind};
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
@@ -27,10 +27,13 @@ fn symlink_rollouts_and_symlink_roots_are_not_followed() {
     )
     .unwrap();
     symlink(&outside, root.join("linked-home")).unwrap();
-    let linked = collect(&[OptIn {
-        kind: RootKind::CodexHome,
-        path: root.join("linked-home"),
-    }]);
+    let linked = collect(
+        &[OptIn {
+            kind: RootKind::CodexHome,
+            path: root.join("linked-home"),
+        }],
+        &ReadOptions::default(),
+    );
     assert!(linked.opened.is_empty());
     assert!(!serde_json::to_string(&linked.snapshot)
         .unwrap()
@@ -42,10 +45,13 @@ fn symlink_rollouts_and_symlink_roots_are_not_followed() {
         root.join("sessions/2026/11/18"),
     )
     .unwrap();
-    let nested = collect(&[OptIn {
-        kind: RootKind::CodexHome,
-        path: root.clone(),
-    }]);
+    let nested = collect(
+        &[OptIn {
+            kind: RootKind::CodexHome,
+            path: root.clone(),
+        }],
+        &ReadOptions::default(),
+    );
     assert!(nested.opened.is_empty());
     let encoded = serde_json::to_string(&nested.snapshot).unwrap();
     assert!(!encoded.contains(sentinel));
@@ -53,10 +59,13 @@ fn symlink_rollouts_and_symlink_roots_are_not_followed() {
 
     let mut fs_root = PathBuf::new();
     fs_root.push(std::path::Component::RootDir);
-    assert!(collect(&[OptIn {
-        kind: RootKind::CodexHome,
-        path: fs_root,
-    }])
+    assert!(collect(
+        &[OptIn {
+            kind: RootKind::CodexHome,
+            path: fs_root,
+        }],
+        &ReadOptions::default(),
+    )
     .opened
     .is_empty());
 }

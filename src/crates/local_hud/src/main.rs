@@ -1,9 +1,24 @@
 //! Command line for the modified local-only build.
 //! Paths come only from `--root`. Nothing is written.
+//! On macOS the process applies a seatbelt before reading. The only `unsafe`
+//! is that seatbelt call in `macos.rs`.
 
-#![forbid(unsafe_code)]
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(not(target_os = "macos"))]
+mod macos {
+    pub fn confine(_roots: &[std::path::PathBuf]) -> Result<bool, String> {
+        Ok(false)
+    }
 
-use agent_hud_local::{simple_hud, OptIn, RootKind, BUILD_LICENSE, BUILD_UPSTREAM, BUILD_VERSION};
+    pub fn self_test(_inside: &std::path::Path, _outside: &std::path::Path) -> Result<(), String> {
+        Err("sandbox self-test runs on macOS".to_owned())
+    }
+}
+
+use agent_hud_local::{
+    simple_hud, OptIn, ReadOptions, RootKind, BUILD_LICENSE, BUILD_UPSTREAM, BUILD_VERSION,
+};
 use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -24,6 +39,8 @@ fn main() -> ExitCode {
 fn run(args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
     let mut json = false;
     let mut hold_ms = 0_u64;
+    let mut allow_mixed_rollouts = false;
+    let mut self_test = None;
     let mut roots = Vec::new();
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
@@ -38,6 +55,16 @@ fn run(args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
             }
             "--json" => json = true,
             "--once" => {}
+            "--allow-mixed-rollouts" => allow_mixed_rollouts = true,
+            "--sandbox-self-test" => {
+                let inside = args
+                    .next()
+                    .ok_or_else(|| "--sandbox-self-test needs INSIDE OUTSIDE".to_owned())?;
+                let outside = args
+                    .next()
+                    .ok_or_else(|| "--sandbox-self-test needs INSIDE OUTSIDE".to_owned())?;
+                self_test = Some((inside, outside));
+            }
             "--hold-ms" => {
                 let value = args
                     .next()
@@ -56,7 +83,22 @@ fn run(args: impl Iterator<Item = String>) -> Result<ExitCode, String> {
             other => return Err(format!("unknown argument {other}")),
         }
     }
-    let report = agent_hud_local::collect(&roots);
+    if let Some((inside, outside)) = self_test {
+        macos::self_test(
+            std::path::Path::new(&inside),
+            std::path::Path::new(&outside),
+        )?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    let root_paths: Vec<std::path::PathBuf> = roots.iter().map(|root| root.path.clone()).collect();
+    let sandbox_applied = macos::confine(&root_paths)?;
+    let report = agent_hud_local::collect(
+        &roots,
+        &ReadOptions {
+            allow_mixed_rollouts,
+            sandbox_applied,
+        },
+    );
     if json {
         println!(
             "{}",
@@ -124,9 +166,12 @@ fn version_text() -> String {
 }
 
 fn help_text() -> &'static str {
-    "agent-hud-local --once [--json] [--hold-ms N] [--root KIND=PATH ...]\n\
+    "agent-hud-local --once [--json] [--allow-mixed-rollouts] [--hold-ms N] [--root KIND=PATH ...]\n\
      KIND is codex, claude-desktop, or cursor-transcripts.\n\
      Each PATH is an explicit opt-in. This build does not scan a home directory,\n\
      read credentials, refresh quotas, or open a network connection.\n\
-     Simple HUD text goes to stdout. Nothing is written."
+     Codex rollout files also contain conversation text. They are not read unless\n\
+     --allow-mixed-rollouts is set. The reader discards those strings and does not\n\
+     store them; a 512-byte buffer can still hold a fragment.\n\
+     On macOS a seatbelt is applied before the read. Nothing is written."
 }

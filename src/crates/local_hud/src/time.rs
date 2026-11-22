@@ -1,13 +1,6 @@
 //! UTC timestamps as the log wrote them. Offsets and prose are rejected so a
 //! prompt stuffed into a timestamp field cannot be kept.
 
-use serde_json::Value;
-
-pub fn unix_field(value: Option<&Value>) -> Option<i64> {
-    let text = value?.as_str()?;
-    unix_rfc3339_z(text)
-}
-
 pub fn unix_rfc3339_z(text: &str) -> Option<i64> {
     let bytes = text.as_bytes();
     if bytes.len() < 20 || bytes.len() > 32 || bytes[10] != b'T' || *bytes.last()? != b'Z' {

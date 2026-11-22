@@ -1,13 +1,11 @@
-//! Line parser for Codex rollouts. The JSON value is dropped at the end of
-//! each line. Only allowlisted fields are copied out.
+//! Rollout parser. Conversation text is not copied. See `json_walk`.
 
 use super::{Client, RawSession};
+use crate::json_walk::{for_each_value, Hit};
 use crate::model::{Session, Window};
-use crate::text::{short_token, u64_field, uuid};
-use crate::time::unix_field;
-use serde_json::Value;
+use crate::text::{is_token, uuid};
+use crate::time::unix_rfc3339_z;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 const SOURCE: &str = "client-recorded rate_limits; not refreshed by this build";
@@ -44,11 +42,11 @@ pub(super) fn parse(file: File, rel: &Path, activity: Option<i64>) -> Option<Raw
         tokens: None,
         windows: Vec::new(),
     };
-    for_each_line(file, |line| absorb(&mut acc, line));
+    for_each_value(file, |hits| apply(&mut acc, hits));
     if acc.id.is_empty() {
         acc.id = uuid_from_name(rel.file_name()?.to_str()?).unwrap_or_default();
     }
-    if acc.id.is_empty() || acc.id.len() > 80 || !crate::text::is_token(&acc.id) {
+    if acc.id.is_empty() || acc.id.len() > 80 || !is_token(&acc.id) {
         return None;
     }
     if !uuid(&acc.id) && acc.id.len() < 8 {
@@ -83,91 +81,77 @@ pub(super) fn parse(file: File, rel: &Path, activity: Option<i64>) -> Option<Raw
     })
 }
 
-fn absorb(acc: &mut Acc, line: &[u8]) {
-    let Ok(value) = serde_json::from_slice::<Value>(line) else {
-        return;
-    };
-    let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
-    let Some(payload) = value.get("payload") else {
-        return;
-    };
-    if kind == "session_meta" {
-        note_meta(acc, payload, unix_field(value.get("timestamp")));
+fn apply(acc: &mut Acc, hits: &[Hit]) {
+    let kind = text(hits, "type");
+    let at = text(hits, "timestamp").as_deref().and_then(unix_rfc3339_z);
+    if kind.as_deref() == Some("session_meta") {
+        if acc.id.is_empty() {
+            if let Some(id) = text(hits, "payload.id").filter(|id| is_token(id) && id.len() <= 80) {
+                acc.id = id;
+            }
+        }
+        acc.started = acc.started.or_else(|| {
+            text(hits, "payload.timestamp")
+                .as_deref()
+                .and_then(unix_rfc3339_z)
+                .or(at)
+        });
+        acc.history_through = acc
+            .history_through
+            .or_else(|| u64_at(hits, "payload.subagent_history_start_ordinal"));
+        acc.subagent = acc.subagent || flag(hits, "payload.source.subagent");
+        acc.client = classify(
+            text(hits, "payload.source").as_deref(),
+            text(hits, "payload.originator").as_deref(),
+        );
         return;
     }
-    if kind == "turn_context" {
-        if let Some(model) = short_token(payload.get("model"), 64) {
+    if kind.as_deref() == Some("turn_context") {
+        if let Some(model) = text(hits, "payload.model")
+            .filter(|model| !model.is_empty() && model.len() <= 64 && is_token(model))
+        {
             acc.model = Some(model);
         }
         return;
     }
-    if inherited(acc, &value)
-        || kind != "event_msg"
-        || payload.get("type").and_then(Value::as_str) != Some("token_count")
+    if kind.as_deref() != Some("event_msg")
+        || text(hits, "payload.type").as_deref() != Some("token_count")
     {
         return;
     }
-    let observed = unix_field(value.get("timestamp"));
-    if let Some(at) = observed {
+    if inherited(acc, at, u64_at(hits, "ordinal")) {
+        return;
+    }
+    if let Some(at) = at {
         acc.observed = Some(acc.observed.map_or(at, |kept| kept.max(at)));
     }
-    if let Some(count) = token_count(payload.get("info")) {
+    if let Some(count) = tokens(hits) {
         acc.tokens = Some(count);
     }
-    let windows = windows_of(payload.get("rate_limits"), observed);
+    let windows = windows(hits, at);
     if !windows.is_empty() {
         acc.windows = windows;
     }
 }
 
-fn note_meta(acc: &mut Acc, payload: &Value, outer_time: Option<i64>) {
-    if acc.id.is_empty() {
-        if let Some(id) = short_token(payload.get("id"), 80) {
-            acc.id = id;
-        }
-    }
-    acc.started = acc
-        .started
-        .or_else(|| unix_field(payload.get("timestamp")))
-        .or(outer_time);
-    acc.history_through = acc.history_through.or_else(|| {
-        payload
-            .get("subagent_history_start_ordinal")
-            .and_then(Value::as_u64)
-    });
-    acc.subagent = acc.subagent || source_is_subagent(payload);
-    acc.client = classify(payload.get("source"), payload.get("originator"));
-}
-
-fn inherited(acc: &Acc, value: &Value) -> bool {
-    if let (Some(started), Some(at)) = (acc.started, unix_field(value.get("timestamp"))) {
+fn inherited(acc: &Acc, at: Option<i64>, ordinal: Option<u64>) -> bool {
+    if let (Some(started), Some(at)) = (acc.started, at) {
         if at < started {
             return true;
         }
     }
-    acc.history_through.is_some_and(|boundary| {
-        value
-            .get("ordinal")
-            .and_then(Value::as_u64)
-            .is_some_and(|ordinal| ordinal <= boundary)
-    })
+    acc.history_through
+        .is_some_and(|boundary| ordinal.is_some_and(|ordinal| ordinal <= boundary))
 }
 
-fn source_is_subagent(payload: &Value) -> bool {
-    payload
-        .get("source")
-        .and_then(|source| source.get("subagent"))
-        .is_some_and(|subagent| !subagent.is_null())
-}
-
-fn classify(source: Option<&Value>, originator: Option<&Value>) -> Client {
-    match source.and_then(Value::as_str) {
+fn classify(source: Option<&str>, originator: Option<&str>) -> Client {
+    match source {
         Some("cli" | "exec") => return Client::CodexCli,
         Some("vscode") => return Client::Other,
         Some("desktop") => return Client::ChatgptDesktop,
         _ => {}
     }
-    match originator.and_then(Value::as_str) {
+    match originator {
         Some("Codex Desktop" | "codex_desktop" | "codex_work_desktop") => Client::ChatgptDesktop,
         Some("codex_vscode") => Client::Other,
         Some("codex-tui" | "codex_cli_rs" | "codex-cli" | "codex_exec") => Client::CodexCli,
@@ -178,52 +162,97 @@ fn classify(source: Option<&Value>, originator: Option<&Value>) -> Client {
     }
 }
 
-fn token_count(info: Option<&Value>) -> Option<TokenCount> {
-    let total = info?.get("total_token_usage")?;
+fn tokens(hits: &[Hit]) -> Option<TokenCount> {
     Some(TokenCount {
-        input: u64_field(total, "input_tokens")?,
-        output: u64_field(total, "output_tokens")?,
-        cache_read: u64_field(total, "cached_input_tokens").unwrap_or(0),
-        cache_write: u64_field(total, "cache_write_input_tokens").unwrap_or(0),
-        reasoning: u64_field(total, "reasoning_output_tokens").unwrap_or(0),
+        input: u64_at(hits, "payload.info.total_token_usage.input_tokens")?,
+        output: u64_at(hits, "payload.info.total_token_usage.output_tokens")?,
+        cache_read: u64_at(hits, "payload.info.total_token_usage.cached_input_tokens").unwrap_or(0),
+        cache_write: u64_at(
+            hits,
+            "payload.info.total_token_usage.cache_write_input_tokens",
+        )
+        .unwrap_or(0),
+        reasoning: u64_at(
+            hits,
+            "payload.info.total_token_usage.reasoning_output_tokens",
+        )
+        .unwrap_or(0),
     })
 }
 
-fn windows_of(limits: Option<&Value>, observed: Option<i64>) -> Vec<Window> {
-    let Some(limits) = limits else {
-        return Vec::new();
-    };
-    let plan = short_token(limits.get("plan_type"), 32);
-    let mut windows = Vec::new();
-    if let Some(window) = one_window("primary", limits.get("primary"), plan.clone(), observed) {
-        windows.push(window);
+fn windows(hits: &[Hit], observed: Option<i64>) -> Vec<Window> {
+    let plan = text(hits, "payload.rate_limits.plan_type")
+        .filter(|plan| is_token(plan) && plan.len() <= 32);
+    let mut found = Vec::new();
+    if let Some(window) = one_window(
+        "primary",
+        "payload.rate_limits.primary",
+        hits,
+        plan.clone(),
+        observed,
+    ) {
+        found.push(window);
     }
-    if let Some(window) = one_window("secondary", limits.get("secondary"), plan, observed) {
-        windows.push(window);
+    if let Some(window) = one_window(
+        "secondary",
+        "payload.rate_limits.secondary",
+        hits,
+        plan,
+        observed,
+    ) {
+        found.push(window);
     }
-    windows
+    found
 }
 
 fn one_window(
     slot: &'static str,
-    value: Option<&Value>,
+    prefix: &str,
+    hits: &[Hit],
     plan_type: Option<String>,
     observed_unix: Option<i64>,
 ) -> Option<Window> {
-    let value = value?;
-    let used_percent = value.get("used_percent")?.as_f64()?;
+    let used_percent = number(hits, &format!("{prefix}.used_percent"))?;
     if !used_percent.is_finite() || !(0.0..=100.0).contains(&used_percent) {
         return None;
     }
     Some(Window {
         slot,
         used_percent,
-        window_minutes: value.get("window_minutes")?.as_u64()?,
-        resets_at_unix: value.get("resets_at")?.as_i64()?,
+        window_minutes: u64_at(hits, &format!("{prefix}.window_minutes"))?,
+        resets_at_unix: i64_at(hits, &format!("{prefix}.resets_at"))?,
         plan_type,
         observed_unix,
         source: SOURCE,
     })
+}
+
+fn text(hits: &[Hit], path: &str) -> Option<String> {
+    hits.iter()
+        .find(|hit| hit.path == path)
+        .and_then(|hit| hit.text.clone())
+}
+
+fn number(hits: &[Hit], path: &str) -> Option<f64> {
+    hits.iter()
+        .find(|hit| hit.path == path)
+        .and_then(|hit| hit.number)
+}
+
+fn u64_at(hits: &[Hit], path: &str) -> Option<u64> {
+    let number = number(hits, path)?;
+    (number >= 0.0 && number.fract() == 0.0 && number <= u64::MAX as f64).then_some(number as u64)
+}
+
+fn i64_at(hits: &[Hit], path: &str) -> Option<i64> {
+    let number = number(hits, path)?;
+    (number.fract() == 0.0 && number <= i64::MAX as f64 && number >= i64::MIN as f64)
+        .then_some(number as i64)
+}
+
+fn flag(hits: &[Hit], path: &str) -> bool {
+    hits.iter()
+        .any(|hit| hit.path == path && hit.flag == Some(true))
 }
 
 fn uuid_from_name(name: &str) -> Option<String> {
@@ -235,39 +264,4 @@ fn uuid_from_name(name: &str) -> Option<String> {
     }
     let candidate = stem.get(start..)?;
     uuid(candidate).then(|| candidate.to_owned())
-}
-
-fn for_each_line(file: File, mut on_line: impl FnMut(&[u8])) {
-    let mut reader = BufReader::new(file);
-    let mut buf = Vec::new();
-    loop {
-        buf.clear();
-        let read = reader.read_until(b'\n', &mut buf).unwrap_or(0);
-        if read == 0 {
-            break;
-        }
-        if buf.len() > crate::policy::MAX_LINE {
-            if buf.last() != Some(&b'\n') {
-                discard_until_newline(&mut reader);
-            }
-            continue;
-        }
-        if buf.last() == Some(&b'\n') {
-            buf.pop();
-        }
-        if buf.last() == Some(&b'\r') {
-            buf.pop();
-        }
-        on_line(&buf);
-    }
-}
-
-fn discard_until_newline(reader: &mut BufReader<File>) {
-    let mut sink = [0_u8; 8192];
-    loop {
-        let read = reader.read(&mut sink).unwrap_or(0);
-        if read == 0 || sink[..read].contains(&b'\n') {
-            break;
-        }
-    }
 }

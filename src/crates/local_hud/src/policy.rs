@@ -6,7 +6,6 @@ use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-pub const MAX_LINE: usize = 256 * 1024;
 pub const MAX_METADATA: u64 = 64 * 1024;
 pub const FILE_CAP: usize = 64;
 pub const DISPLAY_CAP: usize = 20;

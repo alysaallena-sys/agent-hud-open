@@ -29,6 +29,27 @@ pub mod reasons {
     pub const UNREADABLE: &str = "opted-in path is unreadable";
     pub const NONE: &str = "none in the opted-in path";
     pub const LISTED: &str = "ids and counters only";
+    pub const MIXED_ROLLOUT: &str = "rollout logs mix counters with conversation text; pass --allow-mixed-rollouts to read them with the discarding reader";
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ReadOptions {
+    /// Codex rollout files contain conversation text in the same JSON lines as
+    /// the counters. The reader does not copy those strings, but its 512-byte
+    /// buffer can hold a fragment of them. Off unless the caller opts in.
+    pub allow_mixed_rollouts: bool,
+    /// True only when the process has already applied an OS sandbox.
+    pub sandbox_applied: bool,
+}
+
+pub fn empty_group_public(reason: &'static str) -> Group {
+    Group {
+        count: 0,
+        truncated: false,
+        quota: Quota::Unavailable { reason },
+        tokens: Tokens::Unavailable { reason },
+        items: Vec::new(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

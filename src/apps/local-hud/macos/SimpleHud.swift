@@ -1,33 +1,79 @@
 import AppKit
+import Darwin
 
-// Simple HUD and menu bar for the modified local-only Agent HUD build.
-// Displays a text file produced by agent-hud-local. This file was not
-// compiled in the environment that added it.
+// Menu-bar Simple HUD for the modified local-only build.
+// Before it reads the text file it applies a seatbelt: no network, no writes,
+// read only the file's directory and system libraries. A failure does not read.
+// This process does not load URLs, open a web view, start a child, or use Apple events.
 //
-// The shell does not load URLs, open a web view, start a child process,
-// send Apple events, or touch the keychain.
+// GitHub-hosted macOS CI can compile and launch this binary. That is not a test
+// on the user's Mac mini.
+
+@_silgen_name("sandbox_init")
+func sandboxInit(
+    _ profile: UnsafePointer<CChar>,
+    _ flags: UInt64,
+    _ errorbuf: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) -> Int32
 
 let arguments = CommandLine.arguments
-guard arguments.count == 2 else {
-    fputs("usage: SimpleHud <hud.txt>\n", stderr)
+let selfTest = arguments.count == 3 && arguments[1] == "--self-test"
+guard arguments.count == 2 || selfTest else {
+    fputs("usage: SimpleHud <hud.txt>\n       SimpleHud --self-test <hud.txt>\n", stderr)
     exit(2)
+}
+let hudPath = selfTest ? arguments[2] : arguments[1]
+
+func refuse(_ message: String) -> Never {
+    fputs("SimpleHud: \(message)\n", stderr)
+    exit(2)
+}
+
+let hudURL = URL(fileURLWithPath: hudPath).standardizedFileURL
+let directory = hudURL.deletingLastPathComponent().path
+let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "/._-+ "))
+if directory.unicodeScalars.contains(where: { !allowed.contains($0) }) {
+    refuse("refusing a path the sandbox profile cannot quote")
+}
+let profile = """
+(version 1)
+(deny default)
+(deny network*)
+(deny network-inbound)
+(deny network-outbound)
+(deny network-bind)
+(deny file-write*)
+(allow file-read* (subpath "/usr/lib") (subpath "/System") (subpath "/usr/share") (subpath "/Library"))
+(allow file-read* (subpath "\(directory)"))
+(allow signal (target self))
+(allow sysctl-read)
+(allow mach-lookup
+    (global-name "com.apple.system.logger")
+    (global-name "com.apple.CoreServices.coreservicesd"))
+"""
+let sandboxCode = profile.withCString { pointer in
+    sandboxInit(pointer, 0, nil)
+}
+if sandboxCode != 0 {
+    refuse("sandbox_init failed (\(sandboxCode)); the HUD text was not read")
 }
 
 let text: String
 do {
-    text = try String(contentsOfFile: arguments[1], encoding: .utf8)
+    text = try String(contentsOf: hudURL, encoding: .utf8)
 } catch {
-    fputs("SimpleHud: could not read the HUD text file\n", stderr)
-    exit(2)
+    refuse("could not read the HUD text file")
 }
 
 final class Delegate: NSObject, NSApplicationDelegate {
     let text: String
+    let selfTest: Bool
     var item: NSStatusItem?
     var panel: NSPanel?
 
-    init(text: String) {
+    init(text: String, selfTest: Bool) {
         self.text = text
+        self.selfTest = selfTest
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -35,11 +81,22 @@ final class Delegate: NSObject, NSApplicationDelegate {
         app.setActivationPolicy(.accessory)
         let status = app.statusBar.statusItem(withLength: NSStatusItem.variableLength)
         let first = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first
-        status.button?.title = String((first ?? "Agent HUD Local").prefix(120))
+        let title = String((first ?? "Agent HUD Local").prefix(120))
+        status.button?.title = title
         status.button?.target = self
         status.button?.action = #selector(togglePanel)
         item = status
-        panel = makePanel()
+        let built = makePanel()
+        panel = built
+        if selfTest {
+            let hasItem = item?.button != nil
+            let hasPanel = built.contentView != nil
+            print("simple_hud_self_test status_item=\(hasItem ? 1 : 0) panel=\(hasPanel ? 1 : 0)")
+            if !hasItem || !hasPanel || !text.contains("Agent HUD Local") {
+                exit(1)
+            }
+            app.terminate(nil)
+        }
     }
 
     func makePanel() -> NSPanel {
@@ -82,9 +139,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
 }
 
 private var retainedDelegate: Delegate?
-
 let app = NSApplication.shared
-let delegate = Delegate(text: text)
+let delegate = Delegate(text: text, selfTest: selfTest)
 retainedDelegate = delegate
 app.delegate = delegate
 app.run()

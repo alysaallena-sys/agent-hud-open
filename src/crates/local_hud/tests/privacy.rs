@@ -3,8 +3,8 @@
 //! `privacy_linux.rs`. Symlink checks live in `privacy_unix.rs`.
 
 use agent_hud_local::{
-    collect, simple_hud, OptIn, Quota, RootKind, Snapshot, Tokens, BUILD_LICENSE, BUILD_UPSTREAM,
-    BUILD_VERSION,
+    collect, simple_hud, OptIn, Quota, ReadOptions, RootKind, Snapshot, Tokens, BUILD_LICENSE,
+    BUILD_UPSTREAM, BUILD_VERSION,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,6 +37,13 @@ const SENTINELS: &[&str] = &[
     "SECRET_HOME_SENTINEL",
     "CANARY_SENTINEL",
 ];
+
+fn opted() -> ReadOptions {
+    ReadOptions {
+        allow_mixed_rollouts: true,
+        sandbox_applied: false,
+    }
+}
 
 fn write(path: &Path, body: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -241,7 +248,7 @@ fn sample() -> (tempfile::TempDir, agent_hud_local::Report) {
     cursor_fixture(&base);
     write(&base.join("CANARY_SENTINEL.txt"), "CANARY_SENTINEL");
     let before = tree(&base);
-    let report = collect(&roots(&base));
+    let report = collect(&roots(&base), &opted());
     assert_eq!(tree(&base), before, "collect wrote or rewrote a file");
     (temp, report)
 }
@@ -408,10 +415,13 @@ fn tokens_without_rate_limits_do_not_become_a_percentage() {
             ),
         ]),
     );
-    let report = collect(&[OptIn {
-        kind: RootKind::CodexHome,
-        path: root,
-    }]);
+    let report = collect(
+        &[OptIn {
+            kind: RootKind::CodexHome,
+            path: root,
+        }],
+        &opted(),
+    );
     let cli = product(&report.snapshot, "Codex CLI");
     assert!(matches!(cli.quota, Quota::Unavailable { .. }));
     assert!(matches!(cli.tokens, Tokens::Recorded { .. }));
@@ -420,7 +430,7 @@ fn tokens_without_rate_limits_do_not_become_a_percentage() {
 
 #[test]
 fn no_opt_in_scans_nothing_and_prints_unavailable() {
-    let report = collect(&[]);
+    let report = collect(&[], &ReadOptions::default());
     for row in &report.snapshot.rows {
         assert!(matches!(row.quota, Quota::Unavailable { reason } if reason.contains("no path")));
     }
@@ -437,10 +447,13 @@ fn cursor_application_support_is_not_walked() {
         "AUTHDB_SENTINEL 13.37",
     );
     let before = tree(&root);
-    let report = collect(&[OptIn {
-        kind: RootKind::CursorTranscripts,
-        path: root.clone(),
-    }]);
+    let report = collect(
+        &[OptIn {
+            kind: RootKind::CursorTranscripts,
+            path: root.clone(),
+        }],
+        &ReadOptions::default(),
+    );
     assert_eq!(tree(&root), before);
     assert!(report.opened.is_empty());
     let cursor = product(&report.snapshot, "Cursor");
@@ -453,10 +466,13 @@ fn cursor_application_support_is_not_walked() {
 fn filesystem_root_is_rejected() {
     let mut root = PathBuf::new();
     root.push(std::path::Component::RootDir);
-    let report = collect(&[OptIn {
-        kind: RootKind::CodexHome,
-        path: root,
-    }]);
+    let report = collect(
+        &[OptIn {
+            kind: RootKind::CodexHome,
+            path: root,
+        }],
+        &ReadOptions::default(),
+    );
     assert_eq!(report.rejected_roots.len(), 1);
     assert!(report.opened.is_empty());
 }
@@ -485,10 +501,13 @@ fn file_cap_drops_the_oldest_rollout() {
         file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + index))
             .unwrap();
     }
-    let report = collect(&[OptIn {
-        kind: RootKind::CodexHome,
-        path: root,
-    }]);
+    let report = collect(
+        &[OptIn {
+            kind: RootKind::CodexHome,
+            path: root,
+        }],
+        &opted(),
+    );
     let cli = product(&report.snapshot, "Codex CLI");
     match &cli.tokens {
         Tokens::Recorded { input_tokens, .. } => assert_eq!(*input_tokens, 64),
@@ -518,10 +537,13 @@ fn oversized_prompt_line_is_not_kept() {
         )),
         &body,
     );
-    let report = collect(&[OptIn {
-        kind: RootKind::CodexHome,
-        path: root,
-    }]);
+    let report = collect(
+        &[OptIn {
+            kind: RootKind::CodexHome,
+            path: root,
+        }],
+        &opted(),
+    );
     let encoded = serde_json::to_string(&report.snapshot).unwrap();
     assert!(!encoded.contains("PROMPT_SENTINEL_do_not_display"));
     match &product(&report.snapshot, "Codex CLI").tokens {
@@ -577,6 +599,7 @@ fn binary_ignores_home_and_writes_nothing() {
         .args([
             "--once",
             "--json",
+            "--allow-mixed-rollouts",
             "--root",
             &format!("codex={}", base.join("codex").display()),
         ])
@@ -588,7 +611,11 @@ fn binary_ignores_home_and_writes_nothing() {
         String::from_utf8_lossy(&ran.stderr)
     );
     let out = String::from_utf8(ran.stdout).unwrap();
-    assert!(out.contains("\"sandbox_applied\":false"));
+    if std::env::consts::OS == "macos" {
+        assert!(out.contains("\"sandbox_applied\":true"));
+    } else {
+        assert!(out.contains("\"sandbox_applied\":false"));
+    }
     assert!(out.contains("42.5"));
     assert!(!out.contains("61.25"));
     assert!(!out.contains("SECRET_HOME_SENTINEL"));
@@ -611,42 +638,41 @@ fn binary_ignores_home_and_writes_nothing() {
 #[test]
 fn source_and_sandbox_files_keep_the_capability_fence() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let src = manifest.join("src");
     let mut rust = Vec::new();
-    for entry in fs::read_dir(&src).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-            rust.push(fs::read_to_string(&path).unwrap());
+    collect_rust(&manifest.join("src"), &mut rust);
+    for (name, source) in &rust {
+        let mut banned = vec![
+            "std::net",
+            "TcpStream",
+            "TcpListener",
+            "UdpSocket",
+            "UnixListener",
+            "UnixStream",
+            "process::Command",
+            "reqwest",
+            "hyper",
+            "tokio",
+            "rustls",
+            "native_tls",
+            "security_framework",
+            "keyring",
+            "rusqlite",
+            "URLSession",
+            "WKWebView",
+            "env::var",
+            "var_os",
+            "File::create",
+            ".create(true)",
+            ".write(true)",
+        ];
+        if name != "macos.rs" {
+            banned.push("unsafe {");
+        }
+        for item in banned {
+            assert!(!source.contains(item), "{name} contains {item}");
         }
     }
-    let source = rust.join("\n");
-    for banned in [
-        "std::net",
-        "TcpStream",
-        "TcpListener",
-        "UdpSocket",
-        "UnixListener",
-        "UnixStream",
-        "process::Command",
-        "reqwest",
-        "hyper",
-        "tokio",
-        "rustls",
-        "native_tls",
-        "security_framework",
-        "keyring",
-        "rusqlite",
-        "URLSession",
-        "WKWebView",
-        "env::var",
-        "var_os",
-        "File::create",
-        ".create(true)",
-        ".write(true)",
-        "unsafe {",
-    ] {
-        assert!(!source.contains(banned), "source contains {banned}");
-    }
+    assert!(rust.iter().any(|(name, _)| name == "macos.rs"));
     let toml = fs::read_to_string(manifest.join("Cargo.toml")).unwrap();
     let deps = toml
         .split("[dependencies]")
@@ -721,6 +747,18 @@ fn source_and_sandbox_files_keep_the_capability_fence() {
         "dlopen",
     ] {
         assert!(!swift.contains(banned), "swift contains {banned}");
+    }
+}
+
+fn collect_rust(dir: &Path, out: &mut Vec<(String, String)>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            collect_rust(&path, out);
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            out.push((name, fs::read_to_string(&path).unwrap()));
+        }
     }
 }
 

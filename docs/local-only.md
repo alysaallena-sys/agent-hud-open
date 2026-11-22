@@ -43,7 +43,7 @@ The binary cannot, because the code and its dependency tree do not contain the m
 - Scan `HOME`, `CODEX_HOME`, or a filesystem root. Those are not consulted. A root with no normal path component is rejected.
 - Follow a symlink into or out of an opted-in root.
 - Display a quota percentage it computed from token counters. A missing or out-of-range `used_percent` stays unavailable.
-- Apply an OS sandbox by itself. `sandbox_applied` is always false.
+- On macOS, call `sandbox_init` before any opted-in read. The profile denies network and file writes and allows reads of the opted-in roots and system libraries. `sandbox_applied` is true only after that call succeeds. A failure exits and does not read. The Linux test binary cannot apply that seatbelt, so its flag stays false; it is not the Mac deliverable.
 
 Denied names include `auth.json`, `credentials.json`, `Cookies`, `state.vscdb`, `.claude.json`, `config.toml`, `hooks.json`, `config.json`, keychain-like names, and `*.pem`, `*.key`, `*.vscdb`.
 
@@ -65,7 +65,7 @@ The upstream desktop app, engine, MCP server, LAN listener, iCloud/phone/watch s
 
 ## Residual risk
 
-1. **Transient parse.** A rollout line under 256 KiB is parsed as JSON. Prompt text in that line exists in memory until the value is dropped. It is not copied into the snapshot, the HUD, or a file. Lines over 256 KiB are discarded without parsing. A test checks that a large prompt line and ordinary message fields do not appear in the snapshot. That is not a proof that the bytes never occupied RAM.
+1. **Byte access.** Codex rollout files mix counters with conversation text. They are not opened unless `--allow-mixed-rollouts` is set. The reader copies only allowlisted short fields. Other strings are discarded as they are read and are not stored. The reader uses a 512-byte buffer, so a fragment of a discarded string can sit in that buffer. That is not zero access. A non-JSON line is skipped up to the next newline without being stored. Claude Desktop index files are the metadata files; a title string in one is discarded the same way. Cursor transcripts are not opened.
 2. **Directory names.** Listing `sessions/YYYY/MM/DD` observes file names. Only `*.jsonl` in that shape are opened. Names that are not kept can still be seen by the process.
 3. **Symlink races.** The checker uses `symlink_metadata` and then `File::open`. A name swapped for a symlink in between is a TOCTOU. The seatbelt profile is the control that would still confine the read to the opted-in subpath. It was not executed here.
 4. **Client-recorded percentages.** `used_percent` is shown only when Codex wrote a finite value from 0 through 100, with a window length and a reset time. It can be stale. The HUD says it is client-recorded and not refreshed. It is not a live quota.
@@ -74,9 +74,9 @@ The upstream desktop app, engine, MCP server, LAN listener, iCloud/phone/watch s
 7. **Claude index.** A `usage` object with any key outside the counter allowlist is ignored, so a note cannot sit beside a number and be partially copied. A title field is not copied. The file is still parsed when it is at most 64 KiB.
 8. **Same-user readers.** Anything the user can read, another process of that user can read. Sandboxing the HUD does not sandbox Codex, Cursor, or Claude Desktop.
 9. **Full tree remains.** Someone can build upstream Agent HUD from this fork. The label on `agent-hud-local` does not follow that binary.
-10. **Seatbelt profile is untested.** `(deny network*)` and `(deny file-write*)` are the intended boundary, including children if the profile is applied to the process. The mach lookups were chosen so a console Rust binary might start. They may be too tight to launch, or a future edit could add a lookup that is broader than logging. Do not remove the network deny to force a launch. `sandbox-exec` is a legacy tool; an App Sandbox entitlement on a real app bundle is the boundary for a bundled app, and that bundle was not built.
+10. **Seatbelt.** The Mac binary calls `sandbox_init` with `(deny network*)` and `(deny file-write*)`. `SimpleHud` does the same before it reads its text file. `.github/workflows/local-hud-macos.yml` runs those checks on a GitHub-hosted `macos-latest` runner, plus a probe that attempts an outside read, a write, and a TCP connect. A runner result is not a test on the user's Mac mini or on macOS 27. Do not remove the network deny to force a launch. The workflow does not disable Gatekeeper.
 11. **Entitlements are unapplied.** `entitlements.plist` enables the App Sandbox and user-selected read-only files, and it does not grant network client, network server, keychain, Apple events, or temporary file exceptions. Entitlements do nothing until a signed app bundle uses them. This change does not sign a bundle.
-12. **Simple HUD UI is uncompiled.** `src/apps/local-hud/macos/SimpleHud.swift` is an AppKit status item and a non-activating panel placed on `visibleFrame` (menu bar and notch already inset). It reads a local text file. It was not compiled, so it has not been shown on an external display.
+12. **Simple HUD.** `SimpleHud` is an AppKit status item and a panel on `visibleFrame`. The macOS workflow compiles it, runs `--self-test`, and packs `AgentHUDLocal.app`. A self-test constructs the status item and panel; it does not show them on the user's external display.
 13. **Linux network test is not a Mac result.** `the_binary_has_no_socket_inside_a_network_namespace` runs the binary under `unshare --net` and checks that process's TCP/UDP tables and file descriptors. That covers that invocation on Linux. It does not execute unbuilt branches, and it says nothing about macOS.
 
 ## Tests
@@ -126,7 +126,7 @@ src/apps/local-hud/run-sandboxed.sh \
 
 The wrapper refuses to start if `sandbox-exec` is missing or the path contains sandbox metacharacters. It passes at most four roots. It was not executed in this change, so a launch failure is possible. If it fails, fix the profile without granting network.
 
-The text HUD is the working UI. The AppKit shell is optional and unbuilt:
+The AppKit shell is the UI the macOS workflow compiles:
 
 ```sh
 xcrun swiftc -O -o SimpleHud src/apps/local-hud/macos/SimpleHud.swift -framework AppKit

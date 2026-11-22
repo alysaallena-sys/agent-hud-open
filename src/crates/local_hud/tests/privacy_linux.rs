@@ -31,6 +31,7 @@ fn the_binary_has_no_socket_inside_a_network_namespace() {
             bin,
             "--once",
             "--json",
+            "--allow-mixed-rollouts",
             "--hold-ms",
             "2000",
             "--root",

@@ -1,0 +1,35 @@
+name: Local HUD macOS
+
+# GitHub-hosted macOS runner for this fork. It is not the user's Mac mini
+# and it is not a claim about macOS 27. Public-repo hosted minutes only.
+on:
+  pull_request:
+  push:
+    branches:
+      - cursor/local-only-hud-ce2f
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  arm64:
+    name: arm64 build, UI, and sandbox
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, test, and sandbox
+        run: sh src/apps/local-hud/macos/ci-macos.sh
+      - name: Upload arm64 app and logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-hud-local-arm64
+          path: |
+            target/agent-hud-local-arm64.zip
+            target/sandbox-self-test.txt
+            target/probe.txt
+            target/ui.txt
+            target/hud.txt
+            target/agent-hud-local-file.txt
+          if-no-files-found: error

@@ -1,11 +1,10 @@
 //! Claude Desktop session index only. Cookies, config.json, and Claude Code
 //! transcripts are not opened. Plan quota stays unavailable.
 
+use crate::json_walk::for_each_value;
 use crate::model::{empty_row, listed_sessions, reasons, Quota, Row, Session, Sessions, Tokens};
 use crate::policy::{Access, DISPLAY_CAP, MAX_METADATA};
-use crate::text::{is_token, u64_field, uuid};
-use serde_json::Value;
-use std::io::Read;
+use crate::text::{is_token, uuid};
 use std::path::Path;
 
 pub struct Scan {
@@ -148,56 +147,61 @@ fn read_index(
     if !stat.is_file || stat.len > MAX_METADATA {
         return None;
     }
-    let mut file = access.open(root, rel)?;
-    let mut buf = Vec::new();
-    file.by_ref()
-        .take(MAX_METADATA + 1)
-        .read_to_end(&mut buf)
-        .ok()?;
-    if buf.len() as u64 > MAX_METADATA {
+    let file = access.open(root, rel)?;
+    let mut session_id = None;
+    let mut archived = false;
+    let mut tainted = false;
+    let mut input = None;
+    let mut output = None;
+    let mut cache_read = None;
+    let mut cache_write = None;
+    let mut reasoning = None;
+    for_each_value(file, |hits| {
+        for hit in hits {
+            match hit.path.as_str() {
+                "sessionId" => session_id = hit.text.clone(),
+                "isArchived" => archived = hit.flag == Some(true),
+                "usage.input_tokens" => input = whole(hit.number),
+                "usage.output_tokens" => output = whole(hit.number),
+                "usage.cached_input_tokens" => cache_read = whole(hit.number),
+                "usage.cache_write_input_tokens" => cache_write = whole(hit.number),
+                "usage.reasoning_output_tokens" => reasoning = whole(hit.number),
+                path if path.starts_with("usage.") => tainted = true,
+                _ => {}
+            }
+        }
+    });
+    if session_id.as_deref() != Some(id) {
         return None;
     }
-    let value: Value = serde_json::from_slice(&buf).ok()?;
-    if value.get("sessionId").and_then(Value::as_str) != Some(id) {
-        return None;
-    }
-    let usage = usage_numbers(value.get("usage"));
+    let usage = (!tainted).then_some(()).and_then(|_| {
+        Some([
+            input?,
+            output?,
+            cache_read.unwrap_or(0),
+            cache_write.unwrap_or(0),
+            reasoning.unwrap_or(0),
+        ])
+    });
     Some(Session {
         id: id.to_owned(),
         model: None,
-        archived: value.get("isArchived") == Some(&Value::Bool(true)),
+        archived,
         subagent: false,
         place: Some(place),
         observed_unix: None,
         activity_unix: stat.modified_unix,
-        input_tokens: usage.as_ref().map(|usage| usage[0]),
-        output_tokens: usage.as_ref().map(|usage| usage[1]),
-        cached_input_tokens: usage.as_ref().map(|usage| usage[2]),
-        cache_write_input_tokens: usage.as_ref().map(|usage| usage[3]),
-        reasoning_output_tokens: usage.as_ref().map(|usage| usage[4]),
+        input_tokens: usage.map(|usage| usage[0]),
+        output_tokens: usage.map(|usage| usage[1]),
+        cached_input_tokens: usage.map(|usage| usage[2]),
+        cache_write_input_tokens: usage.map(|usage| usage[3]),
+        reasoning_output_tokens: usage.map(|usage| usage[4]),
     })
 }
 
-fn usage_numbers(value: Option<&Value>) -> Option<[u64; 5]> {
-    let usage = value?;
-    let object = usage.as_object()?;
-    const KEYS: [&str; 5] = [
-        "input_tokens",
-        "output_tokens",
-        "cached_input_tokens",
-        "cache_write_input_tokens",
-        "reasoning_output_tokens",
-    ];
-    if object.keys().any(|key| !KEYS.contains(&key.as_str())) {
-        return None;
-    }
-    Some([
-        u64_field(usage, "input_tokens")?,
-        u64_field(usage, "output_tokens")?,
-        u64_field(usage, "cached_input_tokens").unwrap_or(0),
-        u64_field(usage, "cache_write_input_tokens").unwrap_or(0),
-        u64_field(usage, "reasoning_output_tokens").unwrap_or(0),
-    ])
+fn whole(number: Option<f64>) -> Option<u64> {
+    let number = number?;
+    (number >= 0.0 && number.fract() == 0.0 && number <= u64::MAX as f64).then_some(number as u64)
 }
 
 fn local_id(name: &str) -> Option<String> {
