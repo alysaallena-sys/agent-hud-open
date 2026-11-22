@@ -29,7 +29,7 @@ func refuse(_ message: String) -> Never {
     exit(2)
 }
 
-let hudURL = URL(fileURLWithPath: hudPath).standardizedFileURL
+let hudURL = URL(fileURLWithPath: hudPath).resolvingSymlinksInPath()
 let directory = hudURL.deletingLastPathComponent().path
 let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "/._-+ "))
 if directory.unicodeScalars.contains(where: { !allowed.contains($0) }) {

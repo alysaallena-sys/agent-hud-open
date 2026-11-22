@@ -29,13 +29,21 @@ pub fn confine(roots: &[PathBuf]) -> Result<bool, String> {
     (global-name \"com.apple.distributed_notifications@Uv3\"))\n",
     );
     if let Ok(executable) = std::env::current_exe() {
-        allow_read(&mut profile, &executable, true)?;
+        allow_literal(&mut profile, &executable)?;
         if let Some(directory) = executable.parent() {
-            allow_read(&mut profile, directory, false)?;
+            allow_tree(&mut profile, directory)?;
         }
     }
     for root in roots {
-        allow_read(&mut profile, root, false)?;
+        // `/var` on macOS is a symlink to `/private/var`. A subpath filter on
+        // the spelling the caller used does not cover the resolved path, so
+        // the seatbelt rejected opted-in temporary directories.
+        allow_tree(&mut profile, root)?;
+        if let Ok(canonical) = root.canonicalize() {
+            if canonical != *root {
+                allow_tree(&mut profile, &canonical)?;
+            }
+        }
     }
     let profile = CString::new(profile).map_err(|_| "sandbox profile was rejected".to_owned())?;
     let mut error = std::ptr::null_mut();
@@ -74,17 +82,35 @@ pub fn self_test(inside: &Path, outside: &Path) -> Result<(), String> {
     }
 }
 
-fn allow_read(profile: &mut String, path: &Path, literal: bool) -> Result<(), String> {
+fn allow_literal(profile: &mut String, path: &Path) -> Result<(), String> {
+    let text = quoted(path)?;
+    profile.push_str(&format!("(allow file-read* (literal \"{text}\"))\n"));
+    Ok(())
+}
+
+fn allow_tree(profile: &mut String, path: &Path) -> Result<(), String> {
+    let mut ancestor = PathBuf::new();
+    for component in path.components() {
+        ancestor.push(component);
+        if ancestor == path {
+            break;
+        }
+        let text = quoted(&ancestor)?;
+        profile.push_str(&format!(
+            "(allow file-read-metadata (literal \"{text}\"))\n"
+        ));
+    }
+    let text = quoted(path)?;
+    profile.push_str(&format!("(allow file-read* (subpath \"{text}\"))\n"));
+    Ok(())
+}
+
+fn quoted(path: &Path) -> Result<String, String> {
     let text = path.to_string_lossy();
     if text.bytes().any(|byte| {
         !(byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-' | b' ' | b'+'))
     }) {
         return Err("refusing a path the sandbox profile cannot quote".to_owned());
     }
-    if literal {
-        profile.push_str(&format!("(allow file-read* (literal \"{text}\"))\n"));
-    } else {
-        profile.push_str(&format!("(allow file-read* (subpath \"{text}\"))\n"));
-    }
-    Ok(())
+    Ok(text.into_owned())
 }

@@ -61,14 +61,17 @@ file "$work/SimpleHud" | grep -q 'arm64'
 file "$work/SandboxProbe" | grep -q 'arm64'
 
 profile=$root/src/apps/local-hud/seatbelt.sb
+inside_real=$(realpath "$inside")
+outside_real=$(realpath "$outside")
+probe=$(realpath "$work/SandboxProbe")
 sandbox-exec \
-  -D "BIN=$work/SandboxProbe" \
-  -D "ROOT0=$inside" \
-  -D "ROOT1=$inside" \
-  -D "ROOT2=$inside" \
-  -D "ROOT3=$inside" \
+  -D "BIN=$probe" \
+  -D "ROOT0=$inside_real" \
+  -D "ROOT1=$inside_real" \
+  -D "ROOT2=$inside_real" \
+  -D "ROOT3=$inside_real" \
   -f "$profile" \
-  "$work/SandboxProbe" "$inside" "$outside" | tee "$work/probe.txt"
+  "$probe" "$inside_real" "$outside_real" | tee "$work/probe.txt"
 grep -q 'outside_read=denied' "$work/probe.txt"
 grep -q 'inside_read=ok' "$work/probe.txt"
 grep -q 'write=denied' "$work/probe.txt"

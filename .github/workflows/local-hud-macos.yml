@@ -4,9 +4,6 @@ name: Local HUD macOS
 # and it is not a claim about macOS 27. Public-repo hosted minutes only.
 on:
   pull_request:
-  push:
-    branches:
-      - cursor/local-only-hud-ce2f
 
 permissions:
   contents: read
