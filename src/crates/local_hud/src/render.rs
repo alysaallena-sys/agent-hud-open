@@ -29,10 +29,13 @@ pub fn simple_hud(snapshot: &Snapshot) -> String {
         "Simple HUD for an external display with no notch. Notch mode is not in this build."
             .to_owned(),
     );
-    lines.push(
+    lines.push(if snapshot.sandbox_applied {
+        "This process applied an OS seatbelt before reading. It does not refresh quotas or open the network."
+            .to_owned()
+    } else {
         "This process did not apply an OS sandbox. It does not refresh quotas or open the network."
-            .to_owned(),
-    );
+            .to_owned()
+    });
     lines.push(String::new());
     for row in &snapshot.rows {
         lines.push(row.product.to_owned());

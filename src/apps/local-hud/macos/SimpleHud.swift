@@ -79,7 +79,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        let status = app.statusBar.statusItem(withLength: NSStatusItem.variableLength)
+        let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let first = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first
         let title = String((first ?? "Agent HUD Local").prefix(120))
         status.button?.title = title
