@@ -60,7 +60,7 @@ target=arm64-apple-macos14.0
 echo "compiling SimpleHud for $target"
 xcrun swiftc -O -target "$target" -o "$work/SimpleHud" "$root/src/apps/local-hud/macos/SimpleHud.swift" -framework AppKit
 echo "compiling SandboxProbe for $target"
-xcrun swiftc -O -target "$target" -o "$work/SandboxProbe" "$root/src/apps/local-hud/macos/SandboxProbe.swift"
+xcrun clang -O2 -target "$target" -o "$work/SandboxProbe" "$root/src/apps/local-hud/macos/SandboxProbe.c"
 echo "SimpleHud file type:"
 file "$work/SimpleHud"
 echo "SandboxProbe file type:"

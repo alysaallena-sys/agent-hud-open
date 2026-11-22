@@ -1,5 +1,5 @@
-;; Seatbelt profile for the agent-hud-local binary.
-;; The wrapper passes BIN and ROOT0..ROOT3. This file was not executed here.
+;; Seatbelt profile for agent-hud-local and the C sandbox probe.
+;; The wrapper passes BIN and ROOT0..ROOT3.
 ;; Do not delete the network deny to make a launch succeed.
 (version 1)
 (deny default)
@@ -8,11 +8,14 @@
 (deny network-outbound)
 (deny network-bind)
 (deny file-write*)
-(deny system-socket)
 (allow file-read*
     (subpath "/usr/lib")
     (subpath "/System")
     (subpath "/usr/share"))
+(allow file-map-executable
+    (literal (param "BIN"))
+    (subpath "/usr/lib")
+    (subpath "/System"))
 (allow file-read* (literal (param "BIN")))
 (allow file-read* (subpath (param "ROOT0")))
 (allow file-read* (subpath (param "ROOT1")))
